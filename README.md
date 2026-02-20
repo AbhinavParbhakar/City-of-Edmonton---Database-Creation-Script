@@ -179,12 +179,6 @@ Vehicle Types, Movement Types, Direction Types (Reference)
    uv pip sync requirements.out
    ```
 
-4. **Set up PostgreSQL database**:
-   ```bash
-   # Create a new PostgreSQL database
-   createdb city_of_edmonton_traffic
-   ```
-
 ## Configuration
 
 ### Environment Variables
@@ -374,20 +368,3 @@ Data is extracted from:
 - **Hierarchical Data**: The table structure enforces a hierarchy, requiring providers to run in sequence
 - **State Management**: TransactionContext prevents redundant database queries during hierarchical insertion
 - **Extensibility**: New provider types can be added by implementing the `CoreDataProvider` protocol
-
-## Future Enhancements
-
-- Add support for incremental data updates
-- Implement data validation and reconciliation
-- Add comprehensive logging and monitoring
-- Support for additional traffic data sources
-- Web API for data queries
-- Real-time data processing capabilities
-
-## License
-
-[Add your license here]
-
-## Contact
-
-For questions or issues, contact the development team.
