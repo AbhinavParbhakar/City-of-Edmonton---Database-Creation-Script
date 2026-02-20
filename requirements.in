@@ -1,0 +1,15 @@
+# Compile this file using UV:
+#   uv pip compile requirements.in -o requirements.txt
+#
+# Or using pip-tools:
+#   pip-compile requirements.in
+
+# Core Dependencies
+psycopg2-binary
+pandas
+python-dotenv
+tqdm
+openpyxl
+
+# Testing
+pytest
