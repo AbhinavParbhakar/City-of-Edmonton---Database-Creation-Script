@@ -241,15 +241,16 @@ class DatabaseUpdater:
         
         return query_results[0][0]
     
-    def insert_if_not_exists(self,table_name : str, labels : list[str], values : list[Any])->None:
-        is_existing_row = self._db_connection.are_existing_attributes_in_table(
-            attr_labels = labels,
-            attr_values = values,
-            table_name = table_name
-        )
+    def update_db(self,table_name : str, labels : list[str], values : list[Any])->None:
+        with self._db_connection as connection:
+            existing_values = connection.select_existing_attributes(
+                table_name=table_name,
+                query_attr=labels,
+                where_labels=labels,
+                where_values=values
+            )
 
-        if not is_existing_row:
-            with self._db_connection as connection:
+            if len(existing_values) == 0:
                 connection.insert_new_information(
                     table_name=table_name,
                     labels=labels,
