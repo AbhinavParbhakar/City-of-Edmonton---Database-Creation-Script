@@ -255,10 +255,9 @@ class VehiclesAndGranularCountsProvider:
                                                                 vehicle_name=vehicle_granular_count.vehicle_name,
                                                                 id=int(movement_vehicle_id))
                     
-                # time_stamp is TIME-only (no date), so this key still collides across
-                # days for multi-day studies -- that data-loss bug is deferred. The
-                # existence check inside update_db only stops literal re-inserts from
-                # re-processing the same data (e.g. monthly re-runs, retried executions).
+                # Full datetime, not .time(): multi-day studies repeat the same
+                # time-of-day on different days, and update_db's existence check
+                # would drop those rows as duplicates.
                 self._db_connection.update_db(
                         table_name=PredefinedTableNames.granular_count.value,
                         labels=[
@@ -268,7 +267,7 @@ class VehiclesAndGranularCountsProvider:
                         ],
                         values=[
                             movement_vehicle_id,
-                            vehicle_granular_count.time.time(),
+                            vehicle_granular_count.time,
                             vehicle_granular_count.traffic_count
                         ]
                     )
