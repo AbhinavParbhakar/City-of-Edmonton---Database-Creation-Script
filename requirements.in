@@ -10,6 +10,7 @@ pandas
 python-dotenv
 tqdm
 openpyxl
+google-cloud-storage
 
 # Testing
 pytest

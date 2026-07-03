@@ -251,7 +251,11 @@ class VehiclesAndGranularCountsProvider:
                                                                 vehicle_name=vehicle_granular_count.vehicle_name,
                                                                 id=int(movement_vehicle_id))
                     
-                self._db_connection.update_db(
+                # time_stamp is TIME-only (no date), so this key still collides across
+                # days for multi-day studies -- that data-loss bug is deferred. This
+                # check only stops literal re-inserts from re-processing the same data
+                # (e.g. monthly re-runs, retried executions).
+                self._db_connection.insert_if_not_exists(
                         table_name=PredefinedTableNames.granular_count.value,
                         labels=[
                             GranularCountsTableColumns.movement_vehicle_id.value,

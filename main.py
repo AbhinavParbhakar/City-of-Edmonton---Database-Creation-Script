@@ -5,6 +5,7 @@ from pathlib import Path
 from providers.core_providers import CoreDataProvider, StudiesDirectionsProvider, StudiesProvider, DirectionsMovementsProvider, VehiclesAndGranularCountsProvider
 from providers.core_providers import TransactionContext, CoreDataWriter
 from providers.extraction_providers import StudiesExtractor, DirectionsExtractor, MovementsExtractor, GranularExtractor
+from providers.gcs_download_provider import GCSFolderDownloader
 from dataclasses import dataclass
 import dotenv
 import os
@@ -17,6 +18,12 @@ def get_connection_string(connection_string:str)->str:
         return connection_string
     except KeyError as e:
         raise e
+
+def get_bool_env(env_key:str, default:bool)->bool:
+    value = os.environ.get(env_key)
+    if value is None:
+        return default
+    return value.strip().lower() in ('1','true','yes')
 
 @dataclass
 class ApplicationConfiguration:
@@ -237,12 +244,19 @@ if __name__ == "__main__":
     
     app_configuration = ApplicationConfiguration(
                             db_connection_string = get_connection_string('LOCAL_DATABASE_URL'),
-                            miovision_base_folder_name = 'Miovision 2025',
-                            vehicle_class_total_volume_sheet_name = 'Total Volume Class Breakdown',
-                            validation_extension = '.xlsx',
-                            intitialize_tables = False,
-                            intitialize_types = False
+                            miovision_base_folder_name = os.environ.get('MIOVISION_INPUT_FOLDER', 'Miovision 2025'),
+                            vehicle_class_total_volume_sheet_name = os.environ.get('MIOVISION_VOLUME_SHEET_NAME', 'Total Volume Class Breakdown'),
+                            validation_extension = os.environ.get('MIOVISION_FILE_EXTENSION', '.xlsx'),
+                            intitialize_tables = get_bool_env('INITIALIZE_TABLES', False),
+                            intitialize_types = get_bool_env('INITIALIZE_TYPES', False)
                         )
-    
+
+    gcs_bucket = os.environ.get('MIOVISION_GCS_BUCKET')
+    if gcs_bucket:
+        GCSFolderDownloader(
+            bucket_name=gcs_bucket,
+            prefix=os.environ.get('INPUT_GCS_PREFIX', '')
+        ).download_into(Path(app_configuration.miovision_base_folder_name))
+
     application = App(app_configuration=app_configuration)
     application.run()
