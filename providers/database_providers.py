@@ -243,9 +243,17 @@ class DatabaseUpdater:
     
     def update_db(self,table_name : str, labels : list[str], values : list[Any])->None:
         with self._db_connection as connection:
-            connection.insert_new_information(
+            existing_values = connection.select_existing_attributes(
                 table_name=table_name,
-                labels=labels,
-                values=values
+                query_attr=labels,
+                where_labels=labels,
+                where_values=values
             )
+            
+            if len(existing_values) == 0:
+                connection.insert_new_information(
+                    table_name=table_name,
+                    labels=labels,
+                    values=values
+                )
         

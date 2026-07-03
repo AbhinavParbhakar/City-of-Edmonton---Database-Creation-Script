@@ -151,6 +151,7 @@ class MovementsExtractor:
         directions_set = {direction for direction in directions}
         miovision_id_string = MiovisionExtractor.get_miovision_id_string(path)
         omit_names = ['Movement','Unnamed']
+        special_case_for_thru = "Lane"
         direction_sheets = pd.read_excel(path,sheet_name=None,skiprows=1)
         
         for sheet_name, direction_df in direction_sheets.items():
@@ -159,15 +160,22 @@ class MovementsExtractor:
             
             for column in direction_df.columns:
                 omit_flag = False
+                column_name = column
+                
+                if special_case_for_thru in column:
+                    print(f"{path} had the special lane issue")
+                    column_name = "Thru"
+                
                 for omit_name in omit_names:
-                    if omit_name in column:
+                    if omit_name in column_name:
                         omit_flag = True
+                
                 
                 if not omit_flag:
                     movements.append(DirectionsMovementsFields(
                         miovision_id=int(miovision_id_string),
                         direction_name=sheet_name,
-                        movement_name=column
+                        movement_name=column_name
                     ))
         
         return movements
@@ -183,7 +191,10 @@ class GranularExtractor:
         miovision_id_string = MiovisionExtractor.get_miovision_id_string(path)
         granular_counts : list[GranularFields] = []
         direction_sheets = pd.read_excel(io=path,sheet_name=None,skiprows=1,index_col=0)
+        grouping_volumes : dict[tuple[str, str, str, str], tuple[datetime, int]] = dict()
         vehicle_index = 0
+        special_case_for_thru = "Lane"
+        time_print_format = "%Y-%m-%dT%H:%M:%S"
         
         for sheet_name, directional_df in direction_sheets.items():
             if sheet_name not in directions_sets:
@@ -194,8 +205,11 @@ class GranularExtractor:
             movement_row_labels = directional_df.columns
             
             for movement_row_label in movement_row_labels:
-                if movement_row_label in movements_sets:
-                    movement_name  = movement_row_label
+                temp_mv_row_label = movement_row_label
+                if special_case_for_thru in movement_row_label:
+                    temp_mv_row_label = "Thru"
+                if temp_mv_row_label in movements_sets:
+                    movement_name  = temp_mv_row_label
                 
                 vehicle_class_name : str = directional_df[movement_row_label].iloc[vehicle_index]
                 if vehicle_class_name not in vehicles_sets:
@@ -211,14 +225,25 @@ class GranularExtractor:
                         # Offset of four rows in excel file for starting granular count
                         raise ValueError(f"Index not of type datetime for row {index + 4}, path: {path}")
                     
-                    granular_counts.append(GranularFields(
-                        miovision_id=int(miovision_id_string),
-                        direction_name=direction_name,
-                        movement_name=movement_name,
-                        vehicle_name=vehicle_class_name,
-                        time=time,
-                        traffic_count=traffic_count
-                    ))
+                    grouping = (direction_name, movement_name, vehicle_class_name, time.strftime(time_print_format))
+                    if grouping not in grouping_volumes:
+                        grouping_volumes[grouping] = (time, traffic_count)
+                    else:
+                        grouping_time, grouping_count = grouping_volumes[grouping]
+                        grouping_volumes[grouping] = (grouping_time, traffic_count + grouping_count)
+            
+        for direction_name, movement_name, vehicle_class_name, time_date in grouping_volumes:
+            grouping = (direction_name, movement_name, vehicle_class_name, time_date)
+            time, traffic_count = grouping_volumes[grouping]
+            granular_counts.append(GranularFields(
+                miovision_id=int(miovision_id_string),
+                direction_name=direction_name,
+                movement_name=movement_name,
+                vehicle_name=vehicle_class_name,
+                time=time,
+                traffic_count=traffic_count
+            ))
+                    
                         
                         
         return granular_counts        
