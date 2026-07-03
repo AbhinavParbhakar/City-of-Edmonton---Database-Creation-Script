@@ -187,24 +187,28 @@ class DirectionsMovementsProvider:
             )
             
             for direction_movement in extracted_data:
-                id = self._db_connection.update_db_and_return_id(
-                    table_name=PredefinedTableNames.directions_movements.value,
-                    labels=[
-                        MovementsDirectionsTableColumns.movement_type_id.value,
-                        MovementsDirectionsTableColumns.study_direction_id.value
-                    ],
-                    values=[
-                        self._context.get_movement_type_id(direction_movement.movement_name),
-                        self._context.get_study_direction_id(direction_movement.miovision_id,direction_movement.direction_name)
-                    ]
-                )
+                try:
+                    id = self._db_connection.update_db_and_return_id(
+                        table_name=PredefinedTableNames.directions_movements.value,
+                        labels=[
+                            MovementsDirectionsTableColumns.movement_type_id.value,
+                            MovementsDirectionsTableColumns.study_direction_id.value
+                        ],
+                        values=[
+                            self._context.get_movement_type_id(direction_movement.movement_name),
+                            self._context.get_study_direction_id(direction_movement.miovision_id,direction_movement.direction_name)
+                        ]
+                    )
+                    
+                    self._context.update_direction_movement_id_mapping(miovision_id=direction_movement.miovision_id,
+                                                                        direction_name=direction_movement.direction_name,
+                                                                        movement_name=direction_movement.movement_name,
+                                                                        id=int(id))
+                    
+                    self._context.update_path_movements_mapping(path=str(path),movement=direction_movement.movement_name)
+                except Exception as e:
+                    raise Exception(f"Exception raised for {direction_movement.miovision_id}: {e}")
                 
-                self._context.update_direction_movement_id_mapping(miovision_id=direction_movement.miovision_id,
-                                                                   direction_name=direction_movement.direction_name,
-                                                                   movement_name=direction_movement.movement_name,
-                                                                   id=int(id))
-                
-                self._context.update_path_movements_mapping(path=str(path),movement=direction_movement.movement_name)
 
 class VehiclesAndGranularCountsProvider:
     def __init__(self, context: TransactionContext, db_connection: DatabaseUpdater, base_validator: BaseFolderValidator, extractor: GranularExtractor) -> None:
