@@ -3,22 +3,14 @@ from pathlib import Path
 
 from .database_provider import ConnectionStringProvider, DatabaseVolumeProvider, LocalConnectionStringProvider, MiovisionDBQueryProvider, MiovisionDBVolumeProvider, VolumeQueryProvider
 from .volume_provider import Authenticator, CredentialsProvider, HtmlAuthenticator, HtmlVolumeProvider, HtmlVolumeScraper, LocalCredentialsProvider, VolumeProvider, VolumeScraper
+from .fixture_files import fixture_files
 
 def excel_files()->list[Path]:
-    test_files_directory = Path('Miovision 2025')
-    
-    assert test_files_directory.exists(), f'Test directory {test_files_directory} does not exist'
-    
-    return [path for path in test_files_directory.iterdir()]
+    return fixture_files()
 
 @pytest.fixture(scope="module")
 def miovision_base_url()->str:
     return "https://datalink.miovision.com/studies/"
-
-
-@pytest.fixture(scope='module')
-def miovision_id_url(miovision_base_url,miovision_id)->str:
-    return f'{miovision_base_url}{miovision_id}'
 
 @pytest.fixture(scope="module")
 def credentials()->CredentialsProvider:
