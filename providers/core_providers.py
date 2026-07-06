@@ -1,137 +1,152 @@
 from typing import Protocol, Any
+from itertools import groupby
 from .types_providers import BaseFolderValidator
 from .tables_providers import PredefinedTableNames, StudiesTableColumns, StudiesDirectionsTableColumns, PredefinedTableLabels, MovementsDirectionsTableColumns
 from .tables_providers import GranularCountsTableColumns, MovementVehiclesTableColumns
 from .database_providers import DatabaseConnection, DatabaseUpdater
-from .extraction_providers import StudiesExtractor, DirectionsExtractor, MovementsExtractor, GranularExtractor
+from .extraction_providers import StudiesExtractor, DirectionsExtractor, MovementsExtractor, GranularExtractor, MiovisionExtractor
 import tqdm
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-class TransactionContext:
+class DatabaseIdResolver:
+    """Resolves entity names to database ids with direct queries.
+
+    Stateless: every call reads the database, so providers can run (or
+    resume) independently without sharing in-process state.
+    """
     def __init__(self, db_connection : DatabaseConnection) -> None:
-        self._direction_name_id_mapping : dict[str,int] = {}
-        self._movement_name_id_mapping : dict[str,int] = {}
-        self._vehicle_name_id_mapping : dict[str, int] = {}
-        
-        self._path_directions_mapping : dict[str,set[str]] = {}
-        self._path_movements_mapping : dict[str,set[str]] = {}
-        
-        self._miovision_studies_directions_id_mapping : dict[tuple,int] = {}
-        self._studies_direction_movement_id_mapping : dict[tuple,int] = {}
-        self._studies_dir_mov_veh_id_mapping : dict[tuple,int] = {}
-        
         self._db_connection = db_connection
 
-    def update_dir_mov_veh_id_mapping(self, miovision_id: int, direction_name: str, movement_name : str, vehicle_name: str, id: int) -> None:
-        key = (miovision_id,direction_name,movement_name,vehicle_name)
-        self._studies_dir_mov_veh_id_mapping[key] = id
-    
-    def get_movement_vehicle_id(self, miovision_id: int, direction_name: str, movement_name : str, vehicle_name: str)->int:
-        key = (miovision_id,direction_name,movement_name,vehicle_name)
-        
-        if key not in self._studies_dir_mov_veh_id_mapping:
-            raise ValueError(f"Key {key} not found in movement_vehicles_mapping")
-        
-        return self._studies_dir_mov_veh_id_mapping[key]
-
-    def get_all_vehicles(self)->list[str]:
-        query_result = self._db_connection.select_existing_attributes(
-            table_name=PredefinedTableNames.vehicles_types,
-            query_attr=[PredefinedTableLabels.vehicles_types]
-        )
-        
-        if len(query_result) == 0:
-            raise RuntimeError("No Vehicles returned from get_all_vehicles() inside of TransactionContext")
-        
-        return [query[0] for query in query_result]
-    
-    def _get_query_result_for_id(self, table_name: str, lables: list[str], values: list[Any]):
+    def _get_single_value(self, table_name : str, query_attr : str, labels : list[str], values : list[Any])->Any:
         query_result = self._db_connection.select_existing_attributes(
             table_name=table_name,
-            query_attr=['id'],
-            where_labels=lables,
+            query_attr=[query_attr],
+            where_labels=labels,
             where_values=values
         )
         if len(query_result) != 1:
-            raise Exception(f"Non-singular result returned when querying ID column for {values}")
-        
+            raise Exception(f"Non-singular result ({len(query_result)} rows) returned when querying {query_attr} of {table_name} for {labels}={values}")
+
         return query_result[0][0]
 
+    def _get_single_id(self, table_name : str, labels : list[str], values : list[Any])->int:
+        return self._get_single_value(table_name=table_name, query_attr='id', labels=labels, values=values)
+
     def get_direction_type_id(self, direction_name : str)->int:
-        if direction_name not in self._direction_name_id_mapping:
-            self._direction_name_id_mapping[direction_name] = self._get_query_result_for_id(
-                table_name=PredefinedTableNames.direction_types.value,
-                lables=[PredefinedTableLabels.direction_types.value],
-                values=[direction_name]
-            )
-        return self._direction_name_id_mapping[direction_name]
-    
+        return self._get_single_id(
+            table_name=PredefinedTableNames.direction_types.value,
+            labels=[PredefinedTableLabels.direction_types.value],
+            values=[direction_name]
+        )
+
     def get_movement_type_id(self, movement_name : str)->int:
-        if movement_name not in self._movement_name_id_mapping:
-            self._movement_name_id_mapping[movement_name] = self._get_query_result_for_id(
+        return self._get_single_id(
+            table_name=PredefinedTableNames.movement_types.value,
+            labels=[PredefinedTableLabels.movement_types.value],
+            values=[movement_name]
+        )
+
+    def get_vehicle_type_id(self, vehicle_name : str)->int:
+        return self._get_single_id(
+            table_name=PredefinedTableNames.vehicles_types.value,
+            labels=[PredefinedTableLabels.vehicles_types.value],
+            values=[vehicle_name]
+        )
+
+    def get_study_direction_id(self, miovision_id : int, direction_name : str)->int:
+        return self._get_single_id(
+            table_name=PredefinedTableNames.studies_directions.value,
+            labels=[
+                StudiesDirectionsTableColumns.miovision_id.value,
+                StudiesDirectionsTableColumns.direction_type_id.value
+            ],
+            values=[
+                miovision_id,
+                self.get_direction_type_id(direction_name)
+            ]
+        )
+
+    def get_direction_movement_id(self, miovision_id : int, direction_name : str, movement_name : str)->int:
+        return self._get_single_id(
+            table_name=PredefinedTableNames.directions_movements.value,
+            labels=[
+                MovementsDirectionsTableColumns.study_direction_id.value,
+                MovementsDirectionsTableColumns.movement_type_id.value
+            ],
+            values=[
+                self.get_study_direction_id(miovision_id, direction_name),
+                self.get_movement_type_id(movement_name)
+            ]
+        )
+
+    def get_direction_names_for_study(self, miovision_id : int)->list[str]:
+        query_result = self._db_connection.select_existing_attributes(
+            table_name=PredefinedTableNames.studies_directions.value,
+            query_attr=[StudiesDirectionsTableColumns.direction_type_id.value],
+            where_labels=[StudiesDirectionsTableColumns.miovision_id.value],
+            where_values=[miovision_id]
+        )
+        if len(query_result) == 0:
+            raise Exception(f"No directions recorded in {PredefinedTableNames.studies_directions.value} for study {miovision_id}")
+
+        return [
+            self._get_single_value(
+                table_name=PredefinedTableNames.direction_types.value,
+                query_attr=PredefinedTableLabels.direction_types.value,
+                labels=['id'],
+                values=[direction_type_id]
+            )
+            for (direction_type_id,) in query_result
+        ]
+
+    def get_movement_names_for_study(self, miovision_id : int)->list[str]:
+        study_direction_rows = self._db_connection.select_existing_attributes(
+            table_name=PredefinedTableNames.studies_directions.value,
+            query_attr=['id'],
+            where_labels=[StudiesDirectionsTableColumns.miovision_id.value],
+            where_values=[miovision_id]
+        )
+        if len(study_direction_rows) == 0:
+            raise Exception(f"No directions recorded in {PredefinedTableNames.studies_directions.value} for study {miovision_id}")
+
+        movement_type_ids : list[int] = []
+        for (study_direction_id,) in study_direction_rows:
+            movement_rows = self._db_connection.select_existing_attributes(
+                table_name=PredefinedTableNames.directions_movements.value,
+                query_attr=[MovementsDirectionsTableColumns.movement_type_id.value],
+                where_labels=[MovementsDirectionsTableColumns.study_direction_id.value],
+                where_values=[study_direction_id]
+            )
+            for (movement_type_id,) in movement_rows:
+                if movement_type_id not in movement_type_ids:
+                    movement_type_ids.append(movement_type_id)
+
+        if len(movement_type_ids) == 0:
+            raise Exception(f"No movements recorded in {PredefinedTableNames.directions_movements.value} for study {miovision_id}")
+
+        return [
+            self._get_single_value(
                 table_name=PredefinedTableNames.movement_types.value,
-                lables=[PredefinedTableLabels.movement_types],
-                values=[movement_name]
+                query_attr=PredefinedTableLabels.movement_types.value,
+                labels=['id'],
+                values=[movement_type_id]
             )
-        return self._movement_name_id_mapping[movement_name]
-    
-    def get_vehicle_type_id(self, vehicle_name: str)->int:
-        if vehicle_name not in self._vehicle_name_id_mapping:
-            self._vehicle_name_id_mapping[vehicle_name] = self._get_query_result_for_id(
-                table_name=PredefinedTableNames.vehicles_types,
-                lables=[PredefinedTableLabels.vehicles_types],
-                values=[vehicle_name]
-            )
-        return self._vehicle_name_id_mapping[vehicle_name]
-    
-    def update_direction_movement_id_mapping(self, miovision_id: int, direction_name: str, movement_name:str, id:int)->None:
-        key = (miovision_id,direction_name,movement_name)
-        self._studies_direction_movement_id_mapping[key] = id
-    
-    def get_direction_movement_id(self, miovision_id: int, direction_name : str, movement_name : str)->int:
-        key = (miovision_id,direction_name,movement_name)
-        if key not in self._studies_direction_movement_id_mapping:
-            raise KeyError(f"Key {key} not found in direction_movement mapping")
-        
-        return self._studies_direction_movement_id_mapping[key]
-    
-    def update_path_movements_mapping(self, path: str, movement: str)->None:
-        if path not in self._path_movements_mapping:
-            self._path_movements_mapping[path] = set()
-        self._path_movements_mapping[path].update([movement])
-    
-    def get_path_movements(self, path: str)->list[str]:
-        if path not in self._path_movements_mapping:
-            raise KeyError(f"Path {path} not found in path_movements mapping")
-        
-        return list(self._path_movements_mapping[path])
-    
-    def update_studies_directions_id_mapping(self,miovision_id:int, direction_name:str, id:int)->None:
-        key = (miovision_id,direction_name)
-        self._miovision_studies_directions_id_mapping[key] = id
+            for movement_type_id in movement_type_ids
+        ]
 
-    def get_study_direction_id(self, miovision_id:int, direction_name:str)->int:
-        key = (miovision_id,direction_name)
-        
-        if key not in self._miovision_studies_directions_id_mapping:
-            raise KeyError(f"Key {key} not found in studies_directions mapping")
+    def get_all_vehicle_names(self)->list[str]:
+        query_result = self._db_connection.select_existing_attributes(
+            table_name=PredefinedTableNames.vehicles_types.value,
+            query_attr=[PredefinedTableLabels.vehicles_types.value]
+        )
 
-        return self._miovision_studies_directions_id_mapping[key]
-        
-    def update_path_directions_mapping(self,path:str,direction:str)->None:
-        if path not in self._path_directions_mapping:
-            self._path_directions_mapping[path] = set()
-        
-        self._path_directions_mapping[path].update([direction])
-        
-    def get_path_directions(self, path:str)->list[str]:
-        if path not in self._path_directions_mapping:
-            raise KeyError(f"Provided path: {path} not in path directions mapping")
-        
-        return list(self._path_directions_mapping[path])
+        if len(query_result) == 0:
+            raise RuntimeError("No Vehicles returned from get_all_vehicle_names() inside of DatabaseIdResolver")
+
+        return [query[0] for query in query_result]
 
 class CoreDataProvider(Protocol):
     def write_data(self)->None:...
@@ -142,153 +157,138 @@ class CoreDataProvider(Protocol):
 class CoreDataWriter:
     def __init__(self, core_providers:list[CoreDataProvider]) -> None:
         self._providers = core_providers
-    
+
     def write_data(self)->None:
         for provider in self._providers:
             provider.write_data()
 
 class StudiesDirectionsProvider:
-    def __init__(self, base_validator: BaseFolderValidator, context: TransactionContext, database_connection : DatabaseUpdater, directions_extractor : DirectionsExtractor) -> None:
+    def __init__(self, base_validator: BaseFolderValidator, resolver: DatabaseIdResolver, database_connection : DatabaseUpdater, directions_extractor : DirectionsExtractor) -> None:
         self._paths = base_validator.get_files()
-        self._context = context
+        self._resolver = resolver
         self._db_connection = database_connection
         self._extractor = directions_extractor
-    
+
     def write_data(self)->None:
         logger.info("Populating %s", PredefinedTableNames.studies_directions.value)
         for path in tqdm.tqdm(self._paths, disable=None):
             try:
                 directions = self._extractor.extract_fields(path=path)
                 for direction in directions:
-                    id = self._db_connection.update_db_and_return_id(
+                    self._db_connection.update_db(
                         table_name=PredefinedTableNames.studies_directions.value,
                         labels=[
                             StudiesDirectionsTableColumns.direction_type_id.value,
                             StudiesDirectionsTableColumns.miovision_id.value
                         ],
                         values=[
-                            self._context.get_direction_type_id(direction.direction_name),
+                            self._resolver.get_direction_type_id(direction.direction_name),
                             direction.miovision_id
                         ]
                     )
-
-                    self._context.update_studies_directions_id_mapping(direction.miovision_id,direction.direction_name,int(id))
-                    self._context.update_path_directions_mapping(str(path),direction.direction_name)
             except Exception:
                 logger.exception("studies_directions failed while processing %s", path)
                 raise
 
 class DirectionsMovementsProvider:
-    def __init__(self, base_validator: BaseFolderValidator, db_connection: DatabaseUpdater, extractor: MovementsExtractor, context: TransactionContext) -> None:
+    def __init__(self, base_validator: BaseFolderValidator, db_connection: DatabaseUpdater, extractor: MovementsExtractor, resolver: DatabaseIdResolver) -> None:
         self._paths = base_validator.get_files()
         self._db_connection = db_connection
         self._extractor = extractor
-        self._context = context
-    
+        self._resolver = resolver
+
     def write_data(self)->None:
         logger.info("Populating %s", PredefinedTableNames.directions_movements.value)
         for path in tqdm.tqdm(self._paths, disable=None):
+            miovision_id = int(MiovisionExtractor.get_miovision_id_string(path))
             extracted_data = self._extractor.extract_fields(
                 path,
-                self._context.get_path_directions(str(path))
+                self._resolver.get_direction_names_for_study(miovision_id)
             )
 
             for direction_movement in extracted_data:
                 try:
-                    id = self._db_connection.update_db_and_return_id(
+                    self._db_connection.update_db(
                         table_name=PredefinedTableNames.directions_movements.value,
                         labels=[
                             MovementsDirectionsTableColumns.movement_type_id.value,
                             MovementsDirectionsTableColumns.study_direction_id.value
                         ],
                         values=[
-                            self._context.get_movement_type_id(direction_movement.movement_name),
-                            self._context.get_study_direction_id(direction_movement.miovision_id,direction_movement.direction_name)
+                            self._resolver.get_movement_type_id(direction_movement.movement_name),
+                            self._resolver.get_study_direction_id(direction_movement.miovision_id,direction_movement.direction_name)
                         ]
                     )
-                    
-                    self._context.update_direction_movement_id_mapping(miovision_id=direction_movement.miovision_id,
-                                                                        direction_name=direction_movement.direction_name,
-                                                                        movement_name=direction_movement.movement_name,
-                                                                        id=int(id))
-                    
-                    self._context.update_path_movements_mapping(path=str(path),movement=direction_movement.movement_name)
                 except Exception as e:
                     logger.exception("directions_movements failed while processing %s", path)
                     raise Exception(f"Exception raised for {direction_movement.miovision_id} ({path}): {e}") from e
-                
+
 
 class VehiclesAndGranularCountsProvider:
-    def __init__(self, context: TransactionContext, db_connection: DatabaseUpdater, base_validator: BaseFolderValidator, extractor: GranularExtractor) -> None:
+    def __init__(self, resolver: DatabaseIdResolver, db_connection: DatabaseUpdater, base_validator: BaseFolderValidator, extractor: GranularExtractor) -> None:
         self._paths = base_validator.get_files()
-        self._context = context
+        self._resolver = resolver
         self._db_connection = db_connection
         self._extractor = extractor
-    
+
     def write_data(self)->None:
         logger.info("Populating %s and %s", PredefinedTableNames.movements_vehicles.value, PredefinedTableNames.granular_count.value)
         for path in tqdm.tqdm(self._paths, disable=None):
             logger.info("Processing granular counts for %s", path.name)
+            miovision_id = int(MiovisionExtractor.get_miovision_id_string(path))
             vehicle_granular_counts = self._extractor.extract_fields(
                 path=path,
-                directions=self._context.get_path_directions(path=str(path)),
-                movements=self._context.get_path_movements(path=str(path)),
-                vehicles=self._context.get_all_vehicles()
+                directions=self._resolver.get_direction_names_for_study(miovision_id),
+                movements=self._resolver.get_movement_names_for_study(miovision_id),
+                vehicles=self._resolver.get_all_vehicle_names()
             )
 
-            for vehicle_granular_count in vehicle_granular_counts:
-                try:
-                    movement_vehicle_id = self._context.get_movement_vehicle_id(
-                        miovision_id=vehicle_granular_count.miovision_id,
-                        direction_name=vehicle_granular_count.direction_name,
-                        movement_name=vehicle_granular_count.movement_name,
-                        vehicle_name=vehicle_granular_count.vehicle_name
-                    )
-                except ValueError:
-                    # First time seeing this movement/vehicle pairing: create the
-                    # row and cache its id.
-                    movement_vehicle_id = self._db_connection.update_db_and_return_id(
-                        table_name=PredefinedTableNames.movements_vehicles.value,
-                        labels=[
-                            MovementVehiclesTableColumns.direction_movement_id.value,
-                            MovementVehiclesTableColumns.vehicle_type_id.value
-                        ],
-                        values=[
-                            self._context.get_direction_movement_id(miovision_id=vehicle_granular_count.miovision_id,
-                                                                    direction_name=vehicle_granular_count.direction_name,
-                                                                    movement_name=vehicle_granular_count.movement_name),
-                            self._context.get_vehicle_type_id(vehicle_granular_count.vehicle_name)
-                        ]
-                    )
-                    self._context.update_dir_mov_veh_id_mapping(miovision_id=vehicle_granular_count.miovision_id,
-                                                                direction_name=vehicle_granular_count.direction_name,
-                                                                movement_name=vehicle_granular_count.movement_name,
-                                                                vehicle_name=vehicle_granular_count.vehicle_name,
-                                                                id=int(movement_vehicle_id))
-                    
-                # Full datetime, not .time(): multi-day studies repeat the same
-                # time-of-day on different days, and update_db's existence check
-                # would drop those rows as duplicates.
-                self._db_connection.update_db(
-                        table_name=PredefinedTableNames.granular_count.value,
-                        labels=[
-                            GranularCountsTableColumns.movement_vehicle_id.value,
-                            GranularCountsTableColumns.time_stamp.value,
-                            GranularCountsTableColumns.traffic_count.value
-                        ],
-                        values=[
-                            movement_vehicle_id,
-                            vehicle_granular_count.time,
-                            vehicle_granular_count.traffic_count
-                        ]
-                    )
+            # The extractor emits rows in consecutive (direction, movement,
+            # vehicle) runs, so the movements_vehicles id is resolved once per
+            # run rather than once per timestamp row; the id never outlives
+            # the group it was fetched for.
+            for (direction_name, movement_name, vehicle_name), granular_rows in groupby(
+                vehicle_granular_counts,
+                key=lambda row: (row.direction_name, row.movement_name, row.vehicle_name)
+            ):
+                movement_vehicle_id = self._db_connection.update_db_and_return_id(
+                    table_name=PredefinedTableNames.movements_vehicles.value,
+                    labels=[
+                        MovementVehiclesTableColumns.direction_movement_id.value,
+                        MovementVehiclesTableColumns.vehicle_type_id.value
+                    ],
+                    values=[
+                        self._resolver.get_direction_movement_id(miovision_id=miovision_id,
+                                                                 direction_name=direction_name,
+                                                                 movement_name=movement_name),
+                        self._resolver.get_vehicle_type_id(vehicle_name)
+                    ]
+                )
+
+                for vehicle_granular_count in granular_rows:
+                    # Full datetime, not .time(): multi-day studies repeat the same
+                    # time-of-day on different days, and update_db's existence check
+                    # would drop those rows as duplicates.
+                    self._db_connection.update_db(
+                            table_name=PredefinedTableNames.granular_count.value,
+                            labels=[
+                                GranularCountsTableColumns.movement_vehicle_id.value,
+                                GranularCountsTableColumns.time_stamp.value,
+                                GranularCountsTableColumns.traffic_count.value
+                            ],
+                            values=[
+                                movement_vehicle_id,
+                                vehicle_granular_count.time,
+                                vehicle_granular_count.traffic_count
+                            ]
+                        )
 
 class StudiesProvider:
     def __init__(self, base_validator: BaseFolderValidator, database_connection : DatabaseConnection, studies_extractor : StudiesExtractor) -> None:
         self._paths = base_validator.get_files()
         self._db_connection = database_connection
         self._studies_extractor = studies_extractor
-    
+
     def write_data(self)->None:
         logger.info("Populating %s", PredefinedTableNames.studies.value)
         with self._db_connection as connection:
@@ -298,7 +298,7 @@ class StudiesProvider:
                 except Exception:
                     logger.exception("studies extraction failed for %s", path)
                     raise
-                
+
                 table_name=PredefinedTableNames.studies.value
                 labels = [
                     StudiesTableColumns.miovision_id.value,
@@ -320,19 +320,19 @@ class StudiesProvider:
                     study_fields.study_type,
                     study_fields.study_name
                 ]
-                
+
                 if study_fields.project_name != None:
                     labels.append(StudiesTableColumns.project_name.value)
                     values.append(study_fields.project_name)
-                
+
                 is_existing_row = connection.are_existing_attributes_in_table(attr_labels = labels,
                                                                               attr_values = values,
                                                                               table_name = table_name)
-                
+
                 if not is_existing_row:
                     connection.insert_new_information(
                         table_name= table_name,
                         labels= labels,
                         values= values
                     )
-                
+

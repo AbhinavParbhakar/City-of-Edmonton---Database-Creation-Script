@@ -3,7 +3,7 @@ from providers.types_providers import MovementsProvider, VehiclesProvider, Direc
 from providers.database_providers import PostgresDatabaseConnection, DatabaseTableWriter, DatabaseTypesWriter, DatabaseUpdater
 from pathlib import Path
 from providers.core_providers import CoreDataProvider, StudiesDirectionsProvider, StudiesProvider, DirectionsMovementsProvider, VehiclesAndGranularCountsProvider
-from providers.core_providers import TransactionContext, CoreDataWriter
+from providers.core_providers import DatabaseIdResolver, CoreDataWriter
 from providers.extraction_providers import StudiesExtractor, DirectionsExtractor, MovementsExtractor, GranularExtractor
 from providers.gcs_download_provider import GCSFolderDownloader
 from dataclasses import dataclass
@@ -67,25 +67,7 @@ class App:
         self._base_validator = BaseFolderValidator(base_folder_path=Path(app_configuration.miovision_base_folder_name),
                                                    validation_extension=app_configuration.validation_extension)
         
-        self._context = self._return_transaction_context()
-    
-
-    def _return_transaction_context(self)->TransactionContext:
-        """
-        Create and return a transaction context used to manage state between core providers
-        
-        ### Arguments
-        None
-        
-        ### External Effects
-        None
-        
-        ### Returns
-        ``TransactionContext`` -- Context to be shared by core providers
-        """
-        return TransactionContext(
-            db_connection=self._database_connection
-        )
+        self._id_resolver = DatabaseIdResolver(db_connection=self._database_connection)
 
     def _initialize_database(self)->None:
         """Create a ``DatabaseTableWriter`` object, assigns it to ``self`` and run the initialization methods.
@@ -131,7 +113,7 @@ class App:
             ),
             StudiesDirectionsProvider(
                 base_validator=self._base_validator,
-                context=self._context,
+                resolver=self._id_resolver,
                 database_connection=self._db_updater,
                 directions_extractor=DirectionsExtractor()
             ),
@@ -139,10 +121,10 @@ class App:
                 base_validator=self._base_validator,
                 db_connection=self._db_updater,
                 extractor=MovementsExtractor(),
-                context=self._context
+                resolver=self._id_resolver
             ),
             VehiclesAndGranularCountsProvider(
-                context=self._context,
+                resolver=self._id_resolver,
                 db_connection=self._db_updater,
                 base_validator=self._base_validator,
                 extractor=GranularExtractor()

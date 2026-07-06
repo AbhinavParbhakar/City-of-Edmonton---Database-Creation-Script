@@ -243,7 +243,7 @@ app_configuration = ApplicationConfiguration(
 1. **Initialization Phase**:
    - Validates Miovision Excel files in the specified folder
    - Sets up database connection
-   - Creates transaction context for state management
+   - Creates the database id resolver shared by the core providers
 
 2. **Database Setup Phase** (if `intitialize_tables=True`):
    - Creates all required tables in PostgreSQL
@@ -331,7 +331,7 @@ tables.
 ### Providers Module (`providers/`)
 
 #### `core_providers.py`
-- **`TransactionContext`**: Maintains mappings between entity names and database IDs
+- **`DatabaseIdResolver`**: Resolves entity names to database IDs with direct queries (stateless — the database is the single source of truth)
 - **`CoreDataProvider`**: Base protocol for all data providers
 - **`StudiesProvider`**: Processes study-level data
 - **`StudiesDirectionsProvider`**: Handles directional volume data
@@ -390,11 +390,11 @@ Data is extracted from:
 - Protocol-based interfaces enable flexibility and testability
 
 ### Error Handling
-- Transaction context raises `ValueError` when required mappings are missing
+- The id resolver raises an exception when a lookup matches zero or multiple rows (e.g. a parent table was not populated first)
 - Database operations raise exceptions on constraint violations or missing tables
 - Validation fails early with informative exception messages
 
 ### Design Considerations
 - **Hierarchical Data**: The table structure enforces a hierarchy, requiring providers to run in sequence
-- **State Management**: TransactionContext prevents redundant database queries during hierarchical insertion
+- **Stateless Providers**: hierarchical keys are looked up from the database when needed rather than cached in memory, so providers hold no in-process state and can be re-run independently
 - **Extensibility**: New provider types can be added by implementing the `CoreDataProvider` protocol
