@@ -3,6 +3,9 @@ from psycopg2 import connect, sql
 from .tables_providers import Table
 from .types_providers import BaseTypeConfiguration
 import tqdm
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class DatabaseConnection(Protocol):
@@ -33,28 +36,31 @@ class PostgresDatabaseConnection:
         return self 
     
     def __exit__(self, exc_type: str, exc_val: Exception, exc_tb)->None:
+        self.context_manager_used = False
         if not exc_type:
-            self.context_manager_used = False
             self.commit()
         else:
-            raise Exception(f'Error occured: {exc_val}')
-        
-    
+            # Roll back the aborted transaction and let the original exception
+            # propagate with its traceback intact (wrapping it in a new
+            # Exception here used to destroy the stack trace).
+            self.connection.rollback()
+
+
     def insert_new_information(self,table_name:str,labels:list[str],values:list[Any])->bool:
+        query = sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
+            sql.Identifier(table_name),
+            sql.SQL(',').join(map(sql.Identifier, labels)),
+            sql.SQL(',').join(sql.SQL('%s') for _ in values)
+        )
         try:
-            query = sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
-                sql.Identifier(table_name),
-                sql.SQL(',').join(map(sql.Identifier, labels)),
-                sql.SQL(',').join(sql.SQL('%s') for _ in values)
-            )
             self.cursor.execute(query,values)
-            if not self.context_manager_used:
-                print('[WARNING] ContextManager not used for DatabaseConnection. Changes may not be commited. \nCall commit() explicity to commit changes.')
-            
-            return True
-        except Exception as e:
-            print(f'Error occured when trying to insert into {table_name}: {e}')
-            return False
+        except Exception:
+            logger.exception("Insert into %s failed for values %s", table_name, values)
+            raise
+        if not self.context_manager_used:
+            logger.warning('ContextManager not used for DatabaseConnection. Changes may not be committed; call commit() explicitly.')
+
+        return True
     
     def commit(self)->None:
         self.connection.commit()
@@ -101,10 +107,10 @@ class PostgresDatabaseConnection:
     def create_table(self,query:sql.Composed)->bool:
         try:
             self.cursor.execute(query)
-            return True
-        except Exception as e:
-            print(f'Exception occured when: {e}')
-            return False
+        except Exception:
+            logger.exception("Table creation failed for query: %s", query.as_string(self.connection))
+            raise
+        return True
     
     def is_existing_attr_in_table(self, attr_name: str, attr_value: str, table_name: str)->bool:
         """ Checks if the given attribute name and value pair exist in the given table.
@@ -174,8 +180,8 @@ class DatabaseTableWriter:
     
     def create_tables(self)->None:
         with self.connection:
-            print("Initializing tables")
-            for table in tqdm.tqdm(self.tables):
+            logger.info("Initializing tables")
+            for table in tqdm.tqdm(self.tables, disable=None):
                 is_success = True
                 if not self.connection.is_existing_table(table.get_table_name()):
                     is_success = self.connection.create_table(table.get_initialization_query())
@@ -191,7 +197,7 @@ class DatabaseTypesWriter:
     def write_into_tables(self)->None:
         with self.db_connection:
             for provider_info in self.providers_info:
-                print(f'Processing {provider_info["base_type_table_name"]} initialization.')
+                logger.info("Processing %s initialization", provider_info["base_type_table_name"])
                 for value in provider_info['base_type_provider'].return_information():
                     is_success = True
                     if not self.db_connection.is_existing_attr_in_table(
@@ -237,7 +243,7 @@ class DatabaseUpdater:
         )
         
         if len(query_results) != 1:
-            raise Exception(f'Non-singular result returned for ID when looking for {values}')
+            raise Exception(f'Non-singular result ({len(query_results)} rows) returned for ID in {table_name} when looking for {labels}={values}')
         
         return query_results[0][0]
     

@@ -5,6 +5,9 @@ from .tables_providers import GranularCountsTableColumns, MovementVehiclesTableC
 from .database_providers import DatabaseConnection, DatabaseUpdater
 from .extraction_providers import StudiesExtractor, DirectionsExtractor, MovementsExtractor, GranularExtractor
 import tqdm
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class TransactionContext:
@@ -152,24 +155,28 @@ class StudiesDirectionsProvider:
         self._extractor = directions_extractor
     
     def write_data(self)->None:
-        print(f"Populating {PredefinedTableNames.studies_directions.value}")
-        for path in tqdm.tqdm(self._paths):
-            directions = self._extractor.extract_fields(path=path)
-            for direction in directions:
-                id = self._db_connection.update_db_and_return_id(
-                    table_name=PredefinedTableNames.studies_directions.value,
-                    labels=[
-                        StudiesDirectionsTableColumns.direction_type_id.value,
-                        StudiesDirectionsTableColumns.miovision_id.value
-                    ],
-                    values=[
-                        self._context.get_direction_type_id(direction.direction_name),
-                        direction.miovision_id
-                    ]
-                )
+        logger.info("Populating %s", PredefinedTableNames.studies_directions.value)
+        for path in tqdm.tqdm(self._paths, disable=None):
+            try:
+                directions = self._extractor.extract_fields(path=path)
+                for direction in directions:
+                    id = self._db_connection.update_db_and_return_id(
+                        table_name=PredefinedTableNames.studies_directions.value,
+                        labels=[
+                            StudiesDirectionsTableColumns.direction_type_id.value,
+                            StudiesDirectionsTableColumns.miovision_id.value
+                        ],
+                        values=[
+                            self._context.get_direction_type_id(direction.direction_name),
+                            direction.miovision_id
+                        ]
+                    )
 
-                self._context.update_studies_directions_id_mapping(direction.miovision_id,direction.direction_name,int(id))
-                self._context.update_path_directions_mapping(str(path),direction.direction_name)
+                    self._context.update_studies_directions_id_mapping(direction.miovision_id,direction.direction_name,int(id))
+                    self._context.update_path_directions_mapping(str(path),direction.direction_name)
+            except Exception:
+                logger.exception("studies_directions failed while processing %s", path)
+                raise
 
 class DirectionsMovementsProvider:
     def __init__(self, base_validator: BaseFolderValidator, db_connection: DatabaseUpdater, extractor: MovementsExtractor, context: TransactionContext) -> None:
@@ -179,13 +186,13 @@ class DirectionsMovementsProvider:
         self._context = context
     
     def write_data(self)->None:
-        print(f"Populating {PredefinedTableNames.directions_movements.value}")
-        for path in tqdm.tqdm(self._paths):
+        logger.info("Populating %s", PredefinedTableNames.directions_movements.value)
+        for path in tqdm.tqdm(self._paths, disable=None):
             extracted_data = self._extractor.extract_fields(
                 path,
                 self._context.get_path_directions(str(path))
             )
-            
+
             for direction_movement in extracted_data:
                 try:
                     id = self._db_connection.update_db_and_return_id(
@@ -207,7 +214,8 @@ class DirectionsMovementsProvider:
                     
                     self._context.update_path_movements_mapping(path=str(path),movement=direction_movement.movement_name)
                 except Exception as e:
-                    raise Exception(f"Exception raised for {direction_movement.miovision_id}: {e}")
+                    logger.exception("directions_movements failed while processing %s", path)
+                    raise Exception(f"Exception raised for {direction_movement.miovision_id} ({path}): {e}") from e
                 
 
 class VehiclesAndGranularCountsProvider:
@@ -218,15 +226,16 @@ class VehiclesAndGranularCountsProvider:
         self._extractor = extractor
     
     def write_data(self)->None:
-        print(f"Populating {PredefinedTableNames.movements_vehicles.value} and {PredefinedTableNames.granular_count.value}.")
-        for path in tqdm.tqdm(self._paths):
+        logger.info("Populating %s and %s", PredefinedTableNames.movements_vehicles.value, PredefinedTableNames.granular_count.value)
+        for path in tqdm.tqdm(self._paths, disable=None):
+            logger.info("Processing granular counts for %s", path.name)
             vehicle_granular_counts = self._extractor.extract_fields(
                 path=path,
                 directions=self._context.get_path_directions(path=str(path)),
                 movements=self._context.get_path_movements(path=str(path)),
                 vehicles=self._context.get_all_vehicles()
             )
-            
+
             for vehicle_granular_count in vehicle_granular_counts:
                 try:
                     movement_vehicle_id = self._context.get_movement_vehicle_id(
@@ -235,7 +244,9 @@ class VehiclesAndGranularCountsProvider:
                         movement_name=vehicle_granular_count.movement_name,
                         vehicle_name=vehicle_granular_count.vehicle_name
                     )
-                except:
+                except ValueError:
+                    # First time seeing this movement/vehicle pairing: create the
+                    # row and cache its id.
                     movement_vehicle_id = self._db_connection.update_db_and_return_id(
                         table_name=PredefinedTableNames.movements_vehicles.value,
                         labels=[
@@ -279,10 +290,14 @@ class StudiesProvider:
         self._studies_extractor = studies_extractor
     
     def write_data(self)->None:
-        print(f"Populating {PredefinedTableNames.studies.value}")
+        logger.info("Populating %s", PredefinedTableNames.studies.value)
         with self._db_connection as connection:
-            for path in tqdm.tqdm(self._paths):
-                study_fields = self._studies_extractor.extract_fields(path)
+            for path in tqdm.tqdm(self._paths, disable=None):
+                try:
+                    study_fields = self._studies_extractor.extract_fields(path)
+                except Exception:
+                    logger.exception("studies extraction failed for %s", path)
+                    raise
                 
                 table_name=PredefinedTableNames.studies.value
                 labels = [
