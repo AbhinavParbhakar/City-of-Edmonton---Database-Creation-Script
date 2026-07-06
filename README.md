@@ -278,6 +278,36 @@ Each provider processes data in sequence:
 pytest tests/
 ```
 
+### Running against the GCP database (Cloud SQL)
+
+The tests connect to whatever `LOCAL_DATABASE_URL` points at. To run them
+against the `coe-vista` Cloud SQL instance:
+
+1. Start the Cloud SQL Auth Proxy (uses your `gcloud` login):
+
+   ```bash
+   cloud-sql-proxy --port 5433 coe-vista:northamerica-northeast2:city-edmonton-traffic-db
+   ```
+
+2. Put the following in `.env` (gitignored):
+
+   ```
+   LOCAL_DATABASE_URL=postgresql://pipeline_user:<password>@127.0.0.1:5433/miovision
+   MIOVISION_USERNAME=<from Secret Manager: miovision-username>
+   MIOVISION_PASSWORD=<from Secret Manager: miovision-password>
+   MIOVISION_GCS_BUCKET=coe-vista-miovision-pipeline
+   ```
+
+3. Test Excel files are downloaded automatically from the bucket into
+   `tests/fixtures/` (see `tests/fixture_files.py`; override the scraper run
+   with `TEST_GCS_PREFIX`). The studies under that prefix must already be
+   loaded into the database by the ETL.
+
+The SQL functions the volume tests call (`get_in_volume`, `get_out_volume`,
+`pedway_in/out_volume_calculation`) and the compass `directional_id` mapping
+live in `sql/volume_functions.sql`. Re-apply that file after re-initializing
+tables.
+
 ### Test Structure
 
 - **`test_volume_provider.py`**: Tests for Miovision volume data extraction and web scraping

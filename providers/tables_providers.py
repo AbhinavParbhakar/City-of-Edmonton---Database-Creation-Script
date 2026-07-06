@@ -241,7 +241,7 @@ class GranularCountTable:
             CREATE TABLE {granular_count}(
                 id INTEGER GENERATED ALWAYS AS IDENTITY,
                 {movement_vehicle_id} INTEGER,
-                {time_stamp} TIME NOT NULL,
+                {time_stamp} TIMESTAMP NOT NULL,
                 {traffic_count} INTEGER NOT NULL,
                 PRIMARY KEY(id),
                 CONSTRAINT fk_movement_vehicle

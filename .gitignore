@@ -137,6 +137,12 @@ celerybeat.pid
 # Environments
 .env
 .envrc
+
+# Miovision session state written by HtmlAuthenticator during tests
+auth.json
+
+# Excel files downloaded from GCS by tests/fixture_files.py
+tests/fixtures/
 .venv
 env/
 venv/

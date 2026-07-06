@@ -10,6 +10,7 @@ import pytest
 from providers.tables_providers import PredefinedTableNames, GranularCountsTableColumns
 from providers.tables_providers import MovementsDirectionsTableColumns, MovementVehiclesTableColumns
 from providers.tables_providers import StudiesTableColumns, StudiesDirectionsTableColumns
+from .fixture_files import fixture_files
 
 
 @pytest.fixture(scope='module')
@@ -28,11 +29,7 @@ def test_database_connection(test_database_connection_string):
     connection.close()
 
 def excel_files()->list[Path]:
-    test_files_directory = Path('Granular Miovision Files')
-    
-    assert test_files_directory.exists(), f'Test directory {test_files_directory} does not exist'
-    
-    return [path for path in test_files_directory.iterdir()]
+    return fixture_files()
     
 def get_total_value_from_excel(path:Path)->int:
     total_volume_sheet_name = 'Total Volume Class Breakdown'

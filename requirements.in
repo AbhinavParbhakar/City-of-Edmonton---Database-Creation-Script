@@ -10,6 +10,9 @@ pandas
 python-dotenv
 tqdm
 openpyxl
+google-cloud-storage
+google-cloud-logging
 
 # Testing
 pytest
+pytest-rerunfailures

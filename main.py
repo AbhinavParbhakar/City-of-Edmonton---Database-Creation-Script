@@ -5,9 +5,28 @@ from pathlib import Path
 from providers.core_providers import CoreDataProvider, StudiesDirectionsProvider, StudiesProvider, DirectionsMovementsProvider, VehiclesAndGranularCountsProvider
 from providers.core_providers import TransactionContext, CoreDataWriter
 from providers.extraction_providers import StudiesExtractor, DirectionsExtractor, MovementsExtractor, GranularExtractor
+from providers.gcs_download_provider import GCSFolderDownloader
 from dataclasses import dataclass
 import dotenv
+import logging
 import os
+
+logger = logging.getLogger(__name__)
+
+
+def setup_logging()->None:
+    """Structured logs when running as a Cloud Run job, plain console
+    logging otherwise.
+
+    Uses StructuredLogHandler (JSON on stdout, parsed by Cloud Run's log
+    agent) rather than the API-client transport: it needs no IAM permissions
+    and cannot drop batched entries when the container exits."""
+    if os.environ.get('CLOUD_RUN_JOB'):
+        from google.cloud.logging.handlers import StructuredLogHandler, setup_logging as gcl_setup_logging
+        gcl_setup_logging(StructuredLogHandler(), log_level=logging.INFO)
+    else:
+        logging.basicConfig(level=logging.INFO,
+                            format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 
 
 def get_connection_string(connection_string:str)->str:
@@ -17,6 +36,12 @@ def get_connection_string(connection_string:str)->str:
         return connection_string
     except KeyError as e:
         raise e
+
+def get_bool_env(env_key:str, default:bool)->bool:
+    value = os.environ.get(env_key)
+    if value is None:
+        return default
+    return value.strip().lower() in ('1','true','yes')
 
 @dataclass
 class ApplicationConfiguration:
@@ -234,15 +259,33 @@ class App:
         
     
 if __name__ == "__main__":
-    
-    app_configuration = ApplicationConfiguration(
-                            db_connection_string = get_connection_string('LOCAL_DATABASE_URL'),
-                            miovision_base_folder_name = 'Miovision 2025',
-                            vehicle_class_total_volume_sheet_name = 'Total Volume Class Breakdown',
-                            validation_extension = '.xlsx',
-                            intitialize_tables = False,
-                            intitialize_types = False
-                        )
-    
-    application = App(app_configuration=app_configuration)
-    application.run()
+    setup_logging()
+
+    try:
+        app_configuration = ApplicationConfiguration(
+                                db_connection_string = get_connection_string('LOCAL_DATABASE_URL'),
+                                miovision_base_folder_name = os.environ.get('MIOVISION_INPUT_FOLDER', 'Miovision 2025'),
+                                vehicle_class_total_volume_sheet_name = os.environ.get('MIOVISION_VOLUME_SHEET_NAME', 'Total Volume Class Breakdown'),
+                                validation_extension = os.environ.get('MIOVISION_FILE_EXTENSION', '.xlsx'),
+                                intitialize_tables = get_bool_env('INITIALIZE_TABLES', False),
+                                intitialize_types = get_bool_env('INITIALIZE_TYPES', False)
+                            )
+
+        gcs_bucket = os.environ.get('MIOVISION_GCS_BUCKET')
+        gcs_prefix = os.environ.get('INPUT_GCS_PREFIX', '')
+        logger.info("Starting db-etl: input_folder=%s gcs_bucket=%s gcs_prefix=%s initialize_tables=%s initialize_types=%s",
+                    app_configuration.miovision_base_folder_name, gcs_bucket, gcs_prefix,
+                    app_configuration.intitialize_tables, app_configuration.intitialize_types)
+
+        if gcs_bucket:
+            GCSFolderDownloader(
+                bucket_name=gcs_bucket,
+                prefix=gcs_prefix
+            ).download_into(Path(app_configuration.miovision_base_folder_name))
+
+        application = App(app_configuration=app_configuration)
+        application.run()
+        logger.info("db-etl run completed successfully")
+    except Exception:
+        logger.exception("db-etl run failed")
+        raise
