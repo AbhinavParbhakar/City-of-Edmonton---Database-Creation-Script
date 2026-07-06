@@ -15,11 +15,15 @@ logger = logging.getLogger(__name__)
 
 
 def setup_logging()->None:
-    """Structured logs to Cloud Logging when running as a Cloud Run job,
-    plain console logging otherwise."""
+    """Structured logs when running as a Cloud Run job, plain console
+    logging otherwise.
+
+    Uses StructuredLogHandler (JSON on stdout, parsed by Cloud Run's log
+    agent) rather than the API-client transport: it needs no IAM permissions
+    and cannot drop batched entries when the container exits."""
     if os.environ.get('CLOUD_RUN_JOB'):
-        import google.cloud.logging
-        google.cloud.logging.Client().setup_logging(log_level=logging.INFO)
+        from google.cloud.logging.handlers import StructuredLogHandler, setup_logging as gcl_setup_logging
+        gcl_setup_logging(StructuredLogHandler(), log_level=logging.INFO)
     else:
         logging.basicConfig(level=logging.INFO,
                             format='%(asctime)s %(levelname)s %(name)s: %(message)s')
