@@ -1,0 +1,16 @@
+# Test-runner image for the miovision-tests Cloud Run Job. Unlike the ETL
+# image (Dockerfile), the tests scrape live Miovision pages, so this builds
+# on the Playwright base image, which provides the browsers; the pip package
+# is installed separately and its version must match the base image tag.
+FROM mcr.microsoft.com/playwright/python:v1.60.0-noble
+
+WORKDIR /app
+
+COPY requirements.in .
+RUN pip install --no-cache-dir -r requirements.in playwright==1.60.0
+
+COPY . .
+
+# --reruns absorbs transient live-site timeouts so a slow Miovision page
+# load doesn't fail the whole pipeline run.
+ENTRYPOINT ["python", "-m", "pytest", "tests", "-q", "--reruns", "2"]
